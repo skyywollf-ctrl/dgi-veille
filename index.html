@@ -14,24 +14,15 @@
 </head>
 <body>
 
-  <!-- ============================================ -->
-  <!-- HEADER GLOBAL (fixe en haut)                 -->
-  <!-- ============================================ -->
+  <!-- HEADER GLOBAL : juste titre + dernière maj -->
   <header class="app-header">
     <div class="header-row">
       <h1 class="app-title">📊 DGI Veille</h1>
       <span id="lastAnalysisLabel" class="last-analysis">Jamais analysé</span>
     </div>
-    <button id="refreshBtn" class="refresh-btn">🔄 Lancer une analyse</button>
-    <div id="progressContainer" class="progress-container hidden">
-      <div class="progress-bar"><div id="progressBar" class="progress-bar-fill"></div></div>
-      <div id="progressLabel" class="progress-label">Initialisation…</div>
-    </div>
   </header>
 
-  <!-- ============================================ -->
-  <!-- ÉCRAN 1 : MON PORTEFEUILLE                   -->
-  <!-- ============================================ -->
+  <!-- ÉCRAN 1 : MON PORTEFEUILLE -->
   <main id="screen-portfolio" class="screen active">
     <div class="screen-controls">
       <select id="sortSelect" class="control">
@@ -52,29 +43,25 @@
     </div>
     <div id="portfolioList" class="cards-list">
       <div class="empty-state">
-        Lance une première analyse pour voir tes actions.
+        Va dans l'onglet "Analyse" pour lancer une première veille.
       </div>
     </div>
   </main>
 
-  <!-- ============================================ -->
-  <!-- ÉCRAN 2 : ASIE - DÉCOUVERTE                  -->
-  <!-- ============================================ -->
+  <!-- ÉCRAN 2 : ASIE -->
   <main id="screen-asia" class="screen">
     <div class="section">
       <h2 class="section-title">🌏 Macro & Marché</h2>
       <div id="asiaMacroCard" class="macro-card">
-        <div class="empty-state">Lance une analyse pour générer le point macro Asie.</div>
+        <div class="empty-state">Lance une analyse Asie pour générer le point macro.</div>
       </div>
     </div>
-
     <div class="section">
       <h2 class="section-title">🏢 Sociétés à connaître</h2>
       <div id="asiaCompaniesList" class="cards-list">
-        <div class="empty-state">Les 13 sociétés préremplies apparaîtront après une analyse.</div>
+        <div class="empty-state">Coche "Asie - Découverte" dans Analyse pour charger les 13 sociétés.</div>
       </div>
     </div>
-
     <div class="section">
       <h2 class="section-title">⭐ Mes intérêts Asie</h2>
       <div id="asiaPersoList" class="cards-list">
@@ -83,9 +70,7 @@
     </div>
   </main>
 
-  <!-- ============================================ -->
-  <!-- ÉCRAN 3 : MES ACTIONS (gestion)              -->
-  <!-- ============================================ -->
+  <!-- ÉCRAN 3 : GESTION ACTIONS -->
   <main id="screen-stocks" class="screen">
     <div class="section">
       <h2 class="section-title">Ajouter un ticker</h2>
@@ -100,25 +85,87 @@
       </div>
       <div id="addTickerMsg" class="info-msg"></div>
     </div>
-
     <div class="section">
       <h2 class="section-title">Portefeuille US / Monde</h2>
       <div id="stocksManageList" class="manage-list"></div>
     </div>
-
     <div class="section">
       <h2 class="section-title">Sociétés Asie suivies</h2>
       <div id="asiaManageList" class="manage-list"></div>
     </div>
   </main>
 
-  <!-- ============================================ -->
-  <!-- ÉCRAN 4 : SETTINGS                           -->
-  <!-- ============================================ -->
+  <!-- ÉCRAN 4 : ANALYSE (nouveau) -->
+  <main id="screen-analysis" class="screen">
+    <div class="section">
+      <h2 class="section-title">🔄 Lancer une analyse</h2>
+      <p class="hint" style="margin-bottom:16px;">
+        Coche les catégories à analyser. Décocher accélère l'analyse.
+      </p>
+
+      <div class="analysis-options">
+        <label class="analysis-checkbox">
+          <input type="checkbox" id="catOwned" checked>
+          <div class="checkbox-content">
+            <div class="checkbox-title">💼 Détenus</div>
+            <div class="checkbox-sub" id="catOwnedCount">— actions</div>
+          </div>
+        </label>
+        <label class="analysis-checkbox">
+          <input type="checkbox" id="catWatchlist" checked>
+          <div class="checkbox-content">
+            <div class="checkbox-title">👁 Watchlist</div>
+            <div class="checkbox-sub" id="catWatchlistCount">— actions</div>
+          </div>
+        </label>
+        <label class="analysis-checkbox">
+          <input type="checkbox" id="catAsiaDiscover">
+          <div class="checkbox-content">
+            <div class="checkbox-title">🌏 Asie - Découverte</div>
+            <div class="checkbox-sub">13 sociétés préremplies + macro</div>
+          </div>
+        </label>
+        <label class="analysis-checkbox">
+          <input type="checkbox" id="catAsiaPerso" checked>
+          <div class="checkbox-content">
+            <div class="checkbox-title">⭐ Asie - Mes intérêts</div>
+            <div class="checkbox-sub" id="catAsiaPersoCount">— actions</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="analysis-options" style="margin-top:8px;">
+        <label class="analysis-checkbox">
+          <input type="checkbox" id="optSkipUnchanged" checked>
+          <div class="checkbox-content">
+            <div class="checkbox-title">⚡ Mode rapide</div>
+            <div class="checkbox-sub">Skip l'IA pour les actions sans changement (économise temps + tokens)</div>
+          </div>
+        </label>
+      </div>
+
+      <button id="refreshBtn" class="btn-primary full-width" style="margin-top:20px; padding:16px;">
+        🚀 Lancer l'analyse sélectionnée
+      </button>
+
+      <div id="progressContainer" class="progress-container hidden" style="margin-top:16px;">
+        <div class="progress-bar"><div id="progressBar" class="progress-bar-fill"></div></div>
+        <div id="progressLabel" class="progress-label">Initialisation…</div>
+      </div>
+
+      <div id="analysisEstimate" class="hint" style="margin-top:12px; text-align:center;"></div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">📜 Dernière analyse</h2>
+      <div id="lastAnalysisInfo" class="empty-state">Aucune analyse pour l'instant.</div>
+    </div>
+  </main>
+
+  <!-- ÉCRAN 5 : SETTINGS -->
   <main id="screen-settings" class="screen">
     <div class="section">
       <h2 class="section-title">🔑 Clés API</h2>
-
       <div class="setting-block">
         <label class="setting-label">Clé API Finnhub <span class="muted">(news)</span></label>
         <input type="password" id="finnhubKey" class="control input" placeholder="Colle ta clé ici">
@@ -126,7 +173,6 @@
           Gratuit, 60 req/min. <a href="https://finnhub.io/register" target="_blank" rel="noopener">Créer une clé sur finnhub.io →</a>
         </p>
       </div>
-
       <div class="setting-block">
         <label class="setting-label">Clé API Claude <span class="muted">(verdicts IA)</span></label>
         <input type="password" id="claudeKey" class="control input" placeholder="sk-ant-...">
@@ -134,7 +180,6 @@
           <a href="https://console.anthropic.com" target="_blank" rel="noopener">Créer une clé sur console.anthropic.com →</a>
         </p>
       </div>
-
       <button id="saveKeysBtn" class="btn-primary full-width">Sauvegarder les clés</button>
       <div id="keysSavedMsg" class="info-msg"></div>
     </div>
@@ -158,21 +203,23 @@
     </div>
 
     <div class="section">
-      <p class="version-label">DGI Veille v1.0 — données : Yahoo Finance, Finnhub, Claude API.</p>
+      <p class="version-label">DGI Veille v1.1</p>
     </div>
   </main>
 
-  <!-- ============================================ -->
-  <!-- NAVIGATION BAS                               -->
-  <!-- ============================================ -->
+  <!-- NAVIGATION BAS : 5 onglets -->
   <nav class="bottom-nav">
     <button class="nav-btn active" data-screen="portfolio">
       <span class="nav-icon">💼</span>
-      <span class="nav-label">Portefeuille</span>
+      <span class="nav-label">Porte.</span>
     </button>
     <button class="nav-btn" data-screen="asia">
       <span class="nav-icon">🌏</span>
       <span class="nav-label">Asie</span>
+    </button>
+    <button class="nav-btn nav-btn-primary" data-screen="analysis">
+      <span class="nav-icon">🔄</span>
+      <span class="nav-label">Analyse</span>
     </button>
     <button class="nav-btn" data-screen="stocks">
       <span class="nav-icon">📋</span>
@@ -180,14 +227,11 @@
     </button>
     <button class="nav-btn" data-screen="settings">
       <span class="nav-icon">⚙️</span>
-      <span class="nav-label">Settings</span>
+      <span class="nav-label">Réglages</span>
     </button>
   </nav>
 
-  <!-- Toast pour notifications discrètes -->
   <div id="toast" class="toast"></div>
-
-  <!-- Scripts : data d'abord, app ensuite (chargés en modules ES) -->
   <script type="module" src="app.js"></script>
 </body>
 </html>
