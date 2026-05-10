@@ -1,6 +1,7 @@
 // ============================================================
-// DGI VEILLE — app.js
-// Logique métier : fetch APIs, cache, comparaison snapshots, rendering
+// DGI VEILLE — app.js v1.1
+// Améliorations : refresh sélectif, skip Claude inchangés,
+// news résumées, dividendes détaillés (an N / N-1 / $).
 // ============================================================
 
 import { DEFAULT_STOCKS } from './data/stocks.js';
@@ -11,19 +12,19 @@ import { ASIA_COMPANIES, ASIA_WARNINGS } from './data/asia.js';
 // ============================================================
 
 const STORAGE_KEYS = {
-  STOCKS: 'dgi.stocks',           // liste actions US/perso
-  ASIA_PERSO: 'dgi.asiaPerso',    // tickers asie perso
+  STOCKS: 'dgi.stocks',
+  ASIA_PERSO: 'dgi.asiaPerso',
   FINNHUB_KEY: 'dgi.finnhubKey',
   CLAUDE_KEY: 'dgi.claudeKey',
   TRANSLATE: 'dgi.translate',
   CURRENT_SNAPSHOT: 'dgi.snapshot.current',
-  HISTORY: 'dgi.snapshot.history',  // 6 derniers snapshots
-  LAST_ANALYSIS: 'dgi.lastAnalysisTs'
+  HISTORY: 'dgi.snapshot.history',
+  LAST_ANALYSIS: 'dgi.lastAnalysisTs',
+  ANALYSIS_PREFS: 'dgi.analysisPrefs'
 };
 
 const MAX_HISTORY = 6;
 
-// Liste de proxies CORS avec fallback
 const CORS_PROXIES = [
   url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
   url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
@@ -36,19 +37,26 @@ const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 // ============================================================
 
 let state = {
-  stocks: [],         // [{ticker, name, sector, type}]
-  asiaPerso: [],      // [{ticker}]
+  stocks: [],
+  asiaPerso: [],
   finnhubKey: '',
   claudeKey: '',
   translateEnabled: true,
   lastAnalysisTs: null,
-  currentSnapshot: null,    // {timestamp, data: {ticker: {...}}, asiaMacro: {...}}
-  previousSnapshot: null,   // pour comparaison
-  isRefreshing: false
+  currentSnapshot: null,
+  previousSnapshot: null,
+  isRefreshing: false,
+  analysisPrefs: {
+    catOwned: true,
+    catWatchlist: true,
+    catAsiaDiscover: false,
+    catAsiaPerso: true,
+    optSkipUnchanged: true
+  }
 };
 
 // ============================================================
-// HELPERS STOCKAGE
+// STORAGE
 // ============================================================
 
 function loadFromStorage() {
@@ -62,24 +70,35 @@ function loadFromStorage() {
     state.lastAnalysisTs = localStorage.getItem(STORAGE_KEYS.LAST_ANALYSIS);
     state.currentSnapshot = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SNAPSHOT)) || null;
 
-    // Le "previous" pour la comparaison = le tout dernier de l'historique
     const history = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY)) || [];
     state.previousSnapshot = history.length > 0 ? history[history.length - 1] : null;
+
+    const prefs = JSON.parse(localStorage.getItem(STORAGE_KEYS.ANALYSIS_PREFS));
+    if (prefs) state.analysisPrefs = { ...state.analysisPrefs, ...prefs };
   } catch (e) {
     console.error('Erreur chargement localStorage:', e);
   }
 }
 
-function saveStocks() {
-  localStorage.setItem(STORAGE_KEYS.STOCKS, JSON.stringify(state.stocks));
-}
+function saveStocks() { localStorage.setItem(STORAGE_KEYS.STOCKS, JSON.stringify(state.stocks)); }
+function saveAsiaPerso() { localStorage.setItem(STORAGE_KEYS.ASIA_PERSO, JSON.stringify(state.asiaPerso)); }
+function saveAnalysisPrefs() { localStorage.setItem(STORAGE_KEYS.ANALYSIS_PREFS, JSON.stringify(state.analysisPrefs)); }
 
-function saveAsiaPerso() {
-  localStorage.setItem(STORAGE_KEYS.ASIA_PERSO, JSON.stringify(state.asiaPerso));
+function mergeSnapshot(newSnapshot) {
+  // IMPORTANT : on FUSIONNE avec l'existant (refresh partiel).
+  // Si on n'a analysé que les Détenus, on garde les données précédentes des autres.
+  const merged = {
+    timestamp: newSnapshot.timestamp,
+    data: { ...(state.currentSnapshot?.data || {}) },
+    asiaMacro: newSnapshot.asiaMacro || state.currentSnapshot?.asiaMacro || null
+  };
+  // Écrase uniquement les tickers qui ont été ré-analysés
+  Object.assign(merged.data, newSnapshot.data);
+  return merged;
 }
 
 function saveSnapshot(snapshot) {
-  // Archive le snapshot précédent dans l'historique
+  // Archive l'ancien snapshot dans l'historique
   if (state.currentSnapshot) {
     const history = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY)) || [];
     history.push(state.currentSnapshot);
@@ -87,7 +106,6 @@ function saveSnapshot(snapshot) {
     localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history));
     state.previousSnapshot = state.currentSnapshot;
   }
-  // Le nouveau devient l'actuel
   state.currentSnapshot = snapshot;
   state.lastAnalysisTs = snapshot.timestamp;
   localStorage.setItem(STORAGE_KEYS.CURRENT_SNAPSHOT, JSON.stringify(snapshot));
@@ -109,12 +127,12 @@ function formatTimeAgo(ts) {
   if (!ts) return 'Jamais analysé';
   const diff = Date.now() - new Date(ts).getTime();
   const min = Math.floor(diff / 60000);
-  if (min < 1)   return 'À l\'instant';
-  if (min < 60)  return `Il y a ${min} min`;
+  if (min < 1)  return 'À l\'instant';
+  if (min < 60) return `Il y a ${min} min`;
   const h = Math.floor(min / 60);
-  if (h < 24)    return `Il y a ${h}h`;
+  if (h < 24)   return `Il y a ${h}h`;
   const d = Math.floor(h / 24);
-  if (d < 7)     return `Il y a ${d}j`;
+  if (d < 7)    return `Il y a ${d}j`;
   return new Date(ts).toLocaleDateString('fr-FR');
 }
 
@@ -137,8 +155,16 @@ function formatPct(value) {
   return `${sign}${Number(value).toFixed(2)}%`;
 }
 
+function formatDateFr(isoDate) {
+  if (!isoDate) return null;
+  try {
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch { return isoDate; }
+}
+
 // ============================================================
-// FETCH AVEC PROXY CORS (fallback automatique)
+// FETCH WITH CORS PROXY
 // ============================================================
 
 async function fetchWithCorsProxy(url, options = {}) {
@@ -151,17 +177,18 @@ async function fetchWithCorsProxy(url, options = {}) {
       return res;
     } catch (e) {
       lastError = e;
-      console.warn(`Proxy CORS échoué, on essaie le suivant:`, e.message);
+      console.warn(`Proxy CORS échoué:`, e.message);
     }
   }
   throw new Error(`Tous les proxies CORS ont échoué : ${lastError?.message}`);
 }
 
 // ============================================================
-// YAHOO FINANCE : chart (cours + variation)
+// YAHOO FINANCE : chart (avec historique dividendes 2 ans)
 // ============================================================
 
-async function fetchYahooChart(ticker, range = '1mo') {
+async function fetchYahooChart(ticker, range = '2y') {
+  // 2 ans pour avoir année en cours + année précédente complète de dividendes
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}&events=div`;
   const res = await fetchWithCorsProxy(url);
   const data = await res.json();
@@ -172,11 +199,18 @@ async function fetchYahooChart(ticker, range = '1mo') {
 
   const meta = result.meta || {};
   const closes = result.indicators?.quote?.[0]?.close || [];
-  const firstClose = closes.find(v => v != null);
-  const lastClose = [...closes].reverse().find(v => v != null) ?? meta.regularMarketPrice;
-  const changePct = (firstClose && lastClose) ? ((lastClose - firstClose) / firstClose) * 100 : null;
+  const timestamps = result.timestamp || [];
 
-  // Dividendes du mois
+  // Variation 1 mois (~22 trading days)
+  const last = [...closes].reverse().find(v => v != null) ?? meta.regularMarketPrice;
+  let oneMonthAgo = null;
+  const targetIdx = Math.max(0, closes.length - 22);
+  for (let i = targetIdx; i < closes.length; i++) {
+    if (closes[i] != null) { oneMonthAgo = closes[i]; break; }
+  }
+  const changePct = (oneMonthAgo && last) ? ((last - oneMonthAgo) / oneMonthAgo) * 100 : null;
+
+  // Dividendes : on récupère TOUT l'historique 2 ans
   const divs = result.events?.dividends || {};
   const dividends = Object.values(divs).map(d => ({
     amount: d.amount,
@@ -184,15 +218,93 @@ async function fetchYahooChart(ticker, range = '1mo') {
   })).sort((a, b) => a.date.localeCompare(b.date));
 
   return {
-    price: lastClose,
+    price: last,
     currency: meta.currency || 'USD',
     changePct,
-    recentDividends: dividends
+    allDividends: dividends
   };
 }
 
 // ============================================================
-// YAHOO FINANCE : quoteSummary (fondamentaux, earnings, divs)
+// ANALYSE DIVIDENDES : an en cours, an précédent, hausse en $
+// ============================================================
+
+function analyzeDividends(allDividends) {
+  if (!allDividends || allDividends.length === 0) {
+    return {
+      currentYearTotal: null,
+      previousYearTotal: null,
+      currentYear: null,
+      previousYear: null,
+      lastDividend: null,
+      lastDividendDate: null,
+      increaseAmount: null,
+      increasePct: null,
+      announcementDate: null,
+      effectiveDate: null
+    };
+  }
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const previousYear = currentYear - 1;
+
+  const currentYearDivs = allDividends.filter(d => d.date.startsWith(String(currentYear)));
+  const previousYearDivs = allDividends.filter(d => d.date.startsWith(String(previousYear)));
+
+  const currentYearTotal = currentYearDivs.reduce((sum, d) => sum + d.amount, 0);
+  const previousYearTotal = previousYearDivs.reduce((sum, d) => sum + d.amount, 0);
+
+  // Dernier dividende effectivement versé
+  const lastDiv = allDividends[allDividends.length - 1];
+
+  // Détection de hausse : compare le dernier dividende à celui d'il y a ~1 an
+  // (le dividende juste avant lui à -4 trimestres typiquement)
+  let increaseAmount = null;
+  let increasePct = null;
+  let announcementDate = null;
+  let effectiveDate = null;
+
+  if (allDividends.length >= 2) {
+    // Le dernier vs le dernier de l'année précédente (à la même époque)
+    const last = allDividends[allDividends.length - 1];
+    // On cherche un dividende ~1 an avant
+    const targetDate = new Date(last.date);
+    targetDate.setFullYear(targetDate.getFullYear() - 1);
+    const targetIso = targetDate.toISOString().slice(0, 10);
+
+    // Trouve le dividende le plus proche d'il y a 1 an (par date)
+    let closestPrior = null;
+    let minDiff = Infinity;
+    for (const d of allDividends) {
+      if (d.date >= last.date) continue;
+      const diff = Math.abs(new Date(d.date) - targetDate);
+      if (diff < minDiff) { minDiff = diff; closestPrior = d; }
+    }
+
+    if (closestPrior && Math.abs(last.amount - closestPrior.amount) > 0.001) {
+      increaseAmount = last.amount - closestPrior.amount;
+      increasePct = (increaseAmount / closestPrior.amount) * 100;
+      effectiveDate = last.date;  // date du premier dividende au nouveau montant
+    }
+  }
+
+  return {
+    currentYearTotal: currentYearTotal > 0 ? currentYearTotal : null,
+    previousYearTotal: previousYearTotal > 0 ? previousYearTotal : null,
+    currentYear,
+    previousYear,
+    lastDividend: lastDiv?.amount ?? null,
+    lastDividendDate: lastDiv?.date ?? null,
+    increaseAmount,
+    increasePct,
+    announcementDate,  // Sera complété par Claude si trouvé dans les news
+    effectiveDate
+  };
+}
+
+// ============================================================
+// YAHOO FINANCE : quoteSummary
 // ============================================================
 
 async function fetchYahooSummary(ticker) {
@@ -209,13 +321,11 @@ async function fetchYahooSummary(ticker) {
     const earn = r.earnings || {};
     const profile = r.summaryProfile || {};
 
-    // Prochaine date earnings
     let nextEarningsDate = null;
     if (ce.earnings?.earningsDate?.[0]?.raw) {
       nextEarningsDate = new Date(ce.earnings.earningsDate[0].raw * 1000).toISOString().slice(0, 10);
     }
 
-    // Earnings récent (EPS actual vs estimate)
     let latestEpsActual = null, latestEpsEstimate = null, latestEpsDate = null;
     const earningsHistory = earn.earningsChart?.quarterly || [];
     if (earningsHistory.length > 0) {
@@ -230,7 +340,7 @@ async function fetchYahooSummary(ticker) {
       sector: profile.sector,
       country: profile.country,
       yield: sd.dividendYield?.raw != null ? sd.dividendYield.raw * 100 : (sd.trailingAnnualDividendYield?.raw != null ? sd.trailingAnnualDividendYield.raw * 100 : null),
-      lastDividend: sd.dividendRate?.raw ?? sd.trailingAnnualDividendRate?.raw ?? null,
+      annualDivRate: sd.dividendRate?.raw ?? sd.trailingAnnualDividendRate?.raw ?? null,
       exDivDate: sd.exDividendDate?.fmt || null,
       nextEarningsDate,
       latestEps: { actual: latestEpsActual, estimate: latestEpsEstimate, date: latestEpsDate }
@@ -242,19 +352,16 @@ async function fetchYahooSummary(ticker) {
 }
 
 // ============================================================
-// FINNHUB : news par action
+// FINNHUB : news
 // ============================================================
 
 async function fetchFinnhubNews(ticker) {
   if (!state.finnhubKey) return [];
 
-  // Pour les tickers étrangers Yahoo, Finnhub veut le format brut
-  // Ex: 0700.HK reste 0700.HK, 7203.T reste 7203.T
-  const symbol = ticker;
   const today = new Date();
   const from = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const to = today.toISOString().slice(0, 10);
-  const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${to}&token=${encodeURIComponent(state.finnhubKey)}`;
+  const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&token=${encodeURIComponent(state.finnhubKey)}`;
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -263,6 +370,7 @@ async function fetchFinnhubNews(ticker) {
     if (!Array.isArray(news)) return [];
     return news.slice(0, 30).map(n => ({
       headline: n.headline,
+      summary: n.summary || '',  // résumé fourni par Finnhub
       url: n.url,
       datetime: n.datetime ? new Date(n.datetime * 1000).toISOString().slice(0, 10) : null,
       source: n.source
@@ -274,11 +382,10 @@ async function fetchFinnhubNews(ticker) {
 }
 
 // ============================================================
-// CLAUDE API : analyse par action
+// YAHOO INDICES (Asie)
 // ============================================================
 
 async function fetchYahooIndices() {
-  // Récupère variation 1 mois des 3 indices Asie
   const indices = { '^HSI': null, '^N225': null, '^KS11': null };
   await Promise.all(Object.keys(indices).map(async (sym) => {
     try {
@@ -291,8 +398,11 @@ async function fetchYahooIndices() {
   return indices;
 }
 
+// ============================================================
+// CLAUDE API
+// ============================================================
+
 function parseClaudeJson(text) {
-  // Nettoie les éventuels markdown fences
   const cleaned = text.trim()
     .replace(/^```json\s*\n?/i, '')
     .replace(/^```\s*\n?/, '')
@@ -313,7 +423,7 @@ async function callClaude(prompt) {
     },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 1000,
+      max_tokens: 2000,  // augmenté pour les résumés de news
       messages: [{ role: 'user', content: prompt }]
     })
   });
@@ -329,12 +439,15 @@ async function callClaude(prompt) {
 
 async function analyzeStockWithClaude(stockData, headlines) {
   const headlinesStr = headlines.length > 0
-    ? headlines.map(h => `- [${h.datetime}] ${h.headline} (${h.url})`).join('\n')
+    ? headlines.map((h, i) => `[${i+1}] [${h.datetime}] ${h.headline}\n    Résumé source : ${h.summary || '(pas de résumé)'}\n    URL: ${h.url}`).join('\n\n')
     : '(Aucune news disponible)';
 
-  const divHistory = stockData.recentDividends?.length > 0
-    ? stockData.recentDividends.map(d => `${d.date}: ${d.amount}`).join(', ')
-    : 'Non disponible';
+  const div = stockData.dividendAnalysis || {};
+  const divInfo = `
+- Total dividendes ${div.currentYear || '?'} (en cours) : ${div.currentYearTotal != null ? div.currentYearTotal.toFixed(4) : 'inconnu'}
+- Total dividendes ${div.previousYear || '?'} (précédent) : ${div.previousYearTotal != null ? div.previousYearTotal.toFixed(4) : 'inconnu'}
+- Dernier dividende versé : ${div.lastDividend ?? 'inconnu'} le ${div.lastDividendDate ?? '?'}
+- Hausse détectée (vs il y a 1 an) : ${div.increaseAmount != null ? `+${div.increaseAmount.toFixed(4)} (${div.increasePct?.toFixed(1)}%)` : 'aucune'}`;
 
   const earningsStr = stockData.latestEps?.actual != null
     ? `EPS ${stockData.latestEps.actual} vs estimé ${stockData.latestEps.estimate}, date ${stockData.latestEps.date}`
@@ -347,25 +460,45 @@ Pays : ${stockData.country || 'N/A'}
 Secteur : ${stockData.sector || 'N/A'}
 Cours actuel : ${stockData.price} ${stockData.currency}
 Variation 1 mois : ${stockData.changePct?.toFixed(2)}%
-Dividende actuel : ${stockData.lastDividend} ${stockData.currency} (${stockData.yield?.toFixed(2)}%)
-Historique dividendes récents : ${divHistory}
+Yield : ${stockData.yield?.toFixed(2) ?? '?'}%
+
+Données dividende :${divInfo}
+
 Earnings récent : ${earningsStr}
 
 News des 30 derniers jours :
 ${headlinesStr}
 
-Réponds UNIQUEMENT en JSON valide, sans markdown fences, avec cette structure exacte :
+Réponds UNIQUEMENT en JSON valide, sans markdown fences :
 {
   "verdict": "positif" | "neutre" | "négatif",
-  "resume": "2-3 phrases en français, ton direct sans jargon corporate",
+  "resume": "2-3 phrases en français direct, sans jargon corporate",
   "hausse_dividende_detectee": true | false,
-  "details_hausse": "ancien montant → nouveau montant et %" ou null,
+  "details_hausse": {
+    "ancien_montant": <nombre ou null>,
+    "nouveau_montant": <nombre ou null>,
+    "hausse_en_dollars": <nombre ou null>,
+    "hausse_en_pct": <nombre ou null>,
+    "date_annonce": "YYYY-MM-DD ou null si non trouvée dans les news",
+    "date_application": "YYYY-MM-DD ou null"
+  },
   "news_importantes": [
-    {"titre_fr": "...", "titre_vo": "...", "url": "...", "date": "...", "sentiment": "positif|neutre|négatif"}
+    {
+      "titre_fr": "titre traduit en français",
+      "titre_vo": "titre original",
+      "resume_fr": "RÉSUMÉ DE 2-3 PHRASES en français du contenu de l'article, pas juste le titre. Explique CE QUE DIT l'article concrètement.",
+      "url": "...",
+      "date": "YYYY-MM-DD",
+      "sentiment": "positif" | "neutre" | "négatif"
+    }
   ]
 }
 
-Sélectionne 3-5 news les plus pertinentes parmi celles fournies (pas les plus récentes, les plus IMPACTANTES pour la thèse d'investissement long terme).`;
+INSTRUCTIONS IMPORTANTES :
+1. Sélectionne 3-5 news les plus IMPACTANTES pour la thèse d'investissement long terme (pas les plus récentes)
+2. Pour chaque news, écris un VRAI RÉSUMÉ en français de 2-3 phrases qui explique le contenu de l'article. Utilise le "Résumé source" fourni quand il existe. Ne te contente PAS de traduire le titre.
+3. Pour "details_hausse", cherche dans les news la date d'annonce et la date d'application de la hausse de dividende. Si pas trouvé, mets null.
+4. Si "hausse_dividende_detectee" est false, mets tous les champs de details_hausse à null.`;
 
   return await callClaude(prompt);
 }
@@ -393,30 +526,62 @@ Réponds UNIQUEMENT en JSON valide, sans markdown fences :
   "geopolitique": "2-3 phrases sur tensions/relations qui impactent les 3 marchés"
 }
 
-Utilise tes connaissances générales + le contexte des variations d'indices. Sois honnête sur ce que tu ne sais pas (cutoff knowledge).`;
+Utilise tes connaissances + le contexte des variations d'indices. Sois honnête sur ce que tu ne sais pas.`;
 
   return await callClaude(prompt);
 }
 
 // ============================================================
-// REFRESH GÉNÉRAL : orchestre tous les fetchs
+// SKIP CLAUDE : détecte si l'action a changé depuis le dernier refresh
 // ============================================================
 
-async function processOneStock(stockMeta, progressCb) {
+function hasSignificantChange(currentData, previousData) {
+  if (!previousData || previousData.error || !previousData.analysis) return true;
+  if (previousData.analysis.error) return true;
+
+  // Compare prix (>2% change), yield, dividende, dernier earnings, news
+  const priceChange = previousData.price && currentData.price
+    ? Math.abs((currentData.price - previousData.price) / previousData.price) > 0.02
+    : true;
+
+  const divChange = (currentData.dividendAnalysis?.lastDividendDate
+    !== previousData.dividendAnalysis?.lastDividendDate);
+
+  const epsChange = currentData.latestEps?.date !== previousData.latestEps?.date;
+
+  // News : si une nouvelle URL apparaît qui n'était pas dans le précédent
+  const prevUrls = new Set((previousData.rawNews || []).map(n => n.url));
+  const hasNewNews = (currentData.rawNews || []).some(n => n.url && !prevUrls.has(n.url));
+
+  return priceChange || divChange || epsChange || hasNewNews;
+}
+
+// ============================================================
+// PROCESS ONE STOCK
+// ============================================================
+
+async function processOneStock(stockMeta, progressCb, skipUnchanged = true) {
   const ticker = stockMeta.ticker;
   try {
     progressCb(`Analyse ${stockMeta.name || ticker}…`);
 
-    // 1. Yahoo chart (cours + variation + divs)
     const chartData = await fetchYahooChart(ticker);
-
-    // 2. Yahoo summary (fondamentaux)
     const summaryData = await fetchYahooSummary(ticker);
-
-    // 3. Finnhub news
     const news = await fetchFinnhubNews(ticker);
 
-    // Fusion data
+    // Analyse dividendes locale (calculée depuis chart)
+    const dividendAnalysis = analyzeDividends(chartData.allDividends);
+
+    // Yield si manquant dans summary : on le recalcule depuis chart
+    let yieldValue = summaryData.yield;
+    if (yieldValue == null && dividendAnalysis.currentYearTotal != null && chartData.price) {
+      // approximation : annualiser le dernier dividende × fréquence implicite
+      const annualEstimate = dividendAnalysis.previousYearTotal || dividendAnalysis.currentYearTotal;
+      if (annualEstimate > 0) {
+        yieldValue = (annualEstimate / chartData.price) * 100;
+      }
+    }
+
     const stockData = {
       ticker,
       name: stockMeta.name || summaryData.name || ticker,
@@ -426,27 +591,38 @@ async function processOneStock(stockMeta, progressCb) {
       price: chartData.price,
       currency: chartData.currency,
       changePct: chartData.changePct,
-      recentDividends: chartData.recentDividends,
-      yield: summaryData.yield,
-      lastDividend: summaryData.lastDividend,
+      yield: yieldValue,
+      annualDivRate: summaryData.annualDivRate,
       exDivDate: summaryData.exDivDate,
       nextEarningsDate: summaryData.nextEarningsDate,
       latestEps: summaryData.latestEps,
+      dividendAnalysis,
       rawNews: news
     };
 
-    // 4. Analyse Claude (si clé dispo)
+    // Décision : skip Claude ou pas ?
+    const previousData = state.currentSnapshot?.data?.[ticker];
+    const shouldCallClaude = !skipUnchanged
+      || !previousData
+      || hasSignificantChange(stockData, previousData);
+
     let analysis = null;
-    if (state.claudeKey) {
+    let usedCache = false;
+
+    if (shouldCallClaude && state.claudeKey) {
       try {
         analysis = await analyzeStockWithClaude(stockData, news);
       } catch (e) {
         console.warn(`Claude échec pour ${ticker}:`, e.message);
         analysis = { error: e.message };
       }
+    } else if (previousData?.analysis) {
+      // On réutilise l'ancienne analyse Claude
+      analysis = previousData.analysis;
+      usedCache = true;
     }
 
-    return { ...stockData, analysis, error: null };
+    return { ...stockData, analysis, usedCache, error: null };
   } catch (e) {
     console.error(`Erreur ${ticker}:`, e);
     return {
@@ -459,14 +635,46 @@ async function processOneStock(stockMeta, progressCb) {
   }
 }
 
+// ============================================================
+// RUN ANALYSIS
+// ============================================================
+
+function getCountByCategory() {
+  return {
+    owned: state.stocks.filter(s => s.type === 'owned').length,
+    watchlist: state.stocks.filter(s => s.type === 'watchlist').length,
+    asiaPerso: state.asiaPerso.length,
+    asiaDiscover: ASIA_COMPANIES.length
+  };
+}
+
+function buildAnalysisQueue(prefs) {
+  const queue = [];
+  if (prefs.catOwned) {
+    queue.push(...state.stocks.filter(s => s.type === 'owned'));
+  }
+  if (prefs.catWatchlist) {
+    queue.push(...state.stocks.filter(s => s.type === 'watchlist'));
+  }
+  if (prefs.catAsiaPerso) {
+    queue.push(...state.asiaPerso.map(t => ({ ticker: t, name: t, type: 'asia-perso' })));
+  }
+  if (prefs.catAsiaDiscover) {
+    queue.push(...ASIA_COMPANIES.map(a => ({ ...a, type: 'asia-discover' })));
+  }
+  return queue;
+}
+
 async function runFullAnalysis() {
   if (state.isRefreshing) return;
-  if (!state.claudeKey) {
-    showToast('⚠️ Configure ta clé Claude API dans Settings');
-    return;
-  }
-  if (!state.finnhubKey) {
-    showToast('⚠️ Configure ta clé Finnhub dans Settings');
+  if (!state.claudeKey) { showToast('⚠️ Configure ta clé Claude dans Settings'); return; }
+  if (!state.finnhubKey) { showToast('⚠️ Configure ta clé Finnhub dans Settings'); return; }
+
+  const prefs = state.analysisPrefs;
+  const queue = buildAnalysisQueue(prefs);
+
+  if (queue.length === 0 && !prefs.catAsiaDiscover) {
+    showToast('⚠️ Coche au moins une catégorie');
     return;
   }
 
@@ -480,66 +688,71 @@ async function runFullAnalysis() {
   btn.textContent = '⏳ Analyse en cours…';
   progressContainer.classList.remove('hidden');
 
-  // Tout ce qu'on va analyser : actions US + asie perso + 13 asie préremplies
-  const asiaList = ASIA_COMPANIES.map(a => ({ ...a, type: 'asia-discover' }));
-  const asiaPersoList = state.asiaPerso.map(t => ({ ticker: t, type: 'asia-perso' }));
-  const allItems = [...state.stocks, ...asiaPersoList, ...asiaList];
-  const total = allItems.length + 1; // +1 pour macro Asie
+  const includeMacro = prefs.catAsiaDiscover;
+  const total = queue.length + (includeMacro ? 1 : 0);
 
-  const snapshot = {
+  const partialSnapshot = {
     timestamp: new Date().toISOString(),
     data: {},
     asiaMacro: null
   };
 
-  // Analyse chaque action séquentiellement (pour ne pas spammer)
-  for (let i = 0; i < allItems.length; i++) {
-    const item = allItems[i];
+  let cachedCount = 0;
+  let analyzedCount = 0;
+
+  // Analyse chaque action
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
     progressBar.style.width = `${(i / total) * 100}%`;
     const result = await processOneStock(item, msg => {
-      progressLabel.textContent = `${msg} (${i + 1}/${allItems.length})`;
-    });
-    snapshot.data[item.ticker] = result;
-    // micro-pause pour ne pas saturer Finnhub
+      progressLabel.textContent = `${msg} (${i + 1}/${queue.length})`;
+    }, prefs.optSkipUnchanged);
+    partialSnapshot.data[item.ticker] = result;
+    if (result.usedCache) cachedCount++; else if (result.analysis && !result.error) analyzedCount++;
     await new Promise(r => setTimeout(r, 250));
   }
 
-  // Macro Asie
-  progressLabel.textContent = 'Analyse macro Asie…';
-  progressBar.style.width = `${(allItems.length / total) * 100}%`;
-  try {
-    const indices = await fetchYahooIndices();
-    snapshot.asiaMacro = await analyzeAsiaMacro(indices);
-    snapshot.asiaMacro.indices = indices;
-  } catch (e) {
-    console.error('Macro Asie échec:', e);
-    snapshot.asiaMacro = { error: e.message };
+  // Macro Asie si Asie-Découverte coché
+  if (includeMacro) {
+    progressLabel.textContent = 'Analyse macro Asie…';
+    progressBar.style.width = `${(queue.length / total) * 100}%`;
+    try {
+      const indices = await fetchYahooIndices();
+      partialSnapshot.asiaMacro = await analyzeAsiaMacro(indices);
+      partialSnapshot.asiaMacro.indices = indices;
+    } catch (e) {
+      console.error('Macro Asie échec:', e);
+      partialSnapshot.asiaMacro = { error: e.message };
+    }
   }
 
   progressBar.style.width = '100%';
   progressLabel.textContent = 'Sauvegarde…';
 
-  saveSnapshot(snapshot);
+  // Fusion avec snapshot précédent (refresh partiel)
+  const mergedSnapshot = mergeSnapshot(partialSnapshot);
+  saveSnapshot(mergedSnapshot);
 
-  // Reset UI
   setTimeout(() => {
     progressContainer.classList.add('hidden');
     progressBar.style.width = '0%';
     btn.disabled = false;
-    btn.textContent = '🔄 Lancer une analyse';
+    btn.textContent = '🚀 Lancer l\'analyse sélectionnée';
     state.isRefreshing = false;
     updateLastAnalysisLabel();
     renderAll();
-    showToast('✅ Analyse terminée');
+    const msg = cachedCount > 0
+      ? `✅ ${analyzedCount} analysées, ${cachedCount} cachées`
+      : `✅ Analyse terminée (${analyzedCount})`;
+    showToast(msg, 3500);
   }, 500);
 }
 
 // ============================================================
-// COMPARAISON SNAPSHOTS : détecte les changements
+// COMPARAISON SNAPSHOTS
 // ============================================================
 
 function compareStock(current, previous) {
-  // Retourne flags de changements
   if (!previous || previous.error) {
     return {
       isNew: true,
@@ -560,23 +773,15 @@ function compareStock(current, previous) {
   const verdictUnchanged = !!current.analysis?.verdict
     && current.analysis.verdict === previous.analysis?.verdict;
 
-  const dividendUnchanged = (
-    current.lastDividend === previous.lastDividend &&
-    current.yield != null && previous.yield != null &&
-    Math.abs((current.yield || 0) - (previous.yield || 0)) < 0.01
-  );
+  const currLast = current.dividendAnalysis?.lastDividend;
+  const prevLast = previous.dividendAnalysis?.lastDividend;
+  const dividendUnchanged = (currLast === prevLast);
 
-  return {
-    isNew: false,
-    verdictChanged,
-    verdictUnchanged,
-    dividendUnchanged,
-    seenNewsUrls
-  };
+  return { isNew: false, verdictChanged, verdictUnchanged, dividendUnchanged, seenNewsUrls };
 }
 
 // ============================================================
-// RENDERING : cartes actions
+// RENDERING : carte action
 // ============================================================
 
 function renderStockCard(stock) {
@@ -593,13 +798,14 @@ function renderStockCard(stock) {
 
   const verdict = stock.analysis?.verdict || 'neutre';
   const summary = stock.analysis?.resume || '(Pas d\'analyse IA disponible)';
-  const hausseDiv = stock.analysis?.hausse_dividende_detectee;
-  const detailsHausse = stock.analysis?.details_hausse;
   const newsList = stock.analysis?.news_importantes || [];
+  const div = stock.dividendAnalysis || {};
+  const hausseDetails = stock.analysis?.details_hausse || {};
+  const isHausse = stock.analysis?.hausse_dividende_detectee || (div.increaseAmount != null && div.increaseAmount > 0);
 
   const changeClass = stock.changePct > 0 ? 'positive' : (stock.changePct < 0 ? 'negative' : 'neutral');
 
-  // Earnings récent : beat / miss / in-line
+  // Earnings
   let epsHtml = '';
   if (stock.latestEps?.actual != null && stock.latestEps?.estimate != null) {
     const a = stock.latestEps.actual, e = stock.latestEps.estimate;
@@ -614,13 +820,54 @@ function renderStockCard(stock) {
   if (stock.nextEarningsDate) {
     const daysUntil = Math.ceil((new Date(stock.nextEarningsDate) - Date.now()) / (24 * 3600 * 1000));
     if (daysUntil >= 0 && daysUntil <= 90) {
-      nextEarningsHtml = `<div class="kv-row"><span class="kv-label">Prochain earnings</span><span class="kv-value">Dans ${daysUntil}j (${stock.nextEarningsDate})</span></div>`;
+      nextEarningsHtml = `<div class="kv-row"><span class="kv-label">Prochain earnings</span><span class="kv-value">Dans ${daysUntil}j (${formatDateFr(stock.nextEarningsDate)})</span></div>`;
     } else {
-      nextEarningsHtml = `<div class="kv-row"><span class="kv-label">Prochain earnings</span><span class="kv-value">${stock.nextEarningsDate}</span></div>`;
+      nextEarningsHtml = `<div class="kv-row"><span class="kv-label">Prochain earnings</span><span class="kv-value">${formatDateFr(stock.nextEarningsDate)}</span></div>`;
     }
   }
 
-  // News rendering avec gestion "déjà vu"
+  // Hausse dividende détaillée
+  let hausseHtml = '';
+  if (isHausse) {
+    const ancien = hausseDetails.ancien_montant ?? (div.lastDividend != null && div.increaseAmount != null ? div.lastDividend - div.increaseAmount : null);
+    const nouveau = hausseDetails.nouveau_montant ?? div.lastDividend;
+    const hausse$ = hausseDetails.hausse_en_dollars ?? div.increaseAmount;
+    const haussePct = hausseDetails.hausse_en_pct ?? div.increasePct;
+    const dateAnnonce = hausseDetails.date_annonce;
+    const dateAppli = hausseDetails.date_application ?? div.effectiveDate;
+
+    hausseHtml = `
+      <div class="div-increase-badge">
+        <div style="font-size:14px; margin-bottom:6px;">🎉 HAUSSE DE DIVIDENDE</div>
+        ${ancien != null && nouveau != null ? `<div class="haus-row"><span>Ancien → Nouveau</span><strong>${formatCurrency(ancien, stock.currency)} → ${formatCurrency(nouveau, stock.currency)}</strong></div>` : ''}
+        ${hausse$ != null ? `<div class="haus-row"><span>Hausse en ${stock.currency || '$'}</span><strong>+${Math.abs(hausse$).toFixed(4)}${haussePct != null ? ` (${haussePct > 0 ? '+' : ''}${haussePct.toFixed(1)}%)` : ''}</strong></div>` : ''}
+        ${dateAnnonce ? `<div class="haus-row"><span>Date d'annonce</span><strong>${formatDateFr(dateAnnonce)}</strong></div>` : ''}
+        ${dateAppli ? `<div class="haus-row"><span>Date d'application</span><strong>${formatDateFr(dateAppli)}</strong></div>` : ''}
+      </div>`;
+  }
+
+  // Section dividende
+  const divRows = [];
+  if (stock.yield != null) {
+    divRows.push(`<div class="kv-row"><span class="kv-label">Yield</span><span class="kv-value">${stock.yield.toFixed(2)}%</span></div>`);
+  }
+  if (div.currentYearTotal != null) {
+    divRows.push(`<div class="kv-row"><span class="kv-label">Total ${div.currentYear} (en cours)</span><span class="kv-value">${formatCurrency(div.currentYearTotal, stock.currency)}</span></div>`);
+  }
+  if (div.previousYearTotal != null) {
+    divRows.push(`<div class="kv-row"><span class="kv-label">Total ${div.previousYear}</span><span class="kv-value">${formatCurrency(div.previousYearTotal, stock.currency)}</span></div>`);
+  }
+  if (div.lastDividend != null) {
+    divRows.push(`<div class="kv-row"><span class="kv-label">Dernier versé</span><span class="kv-value">${formatCurrency(div.lastDividend, stock.currency)} <span class="muted">(${formatDateFr(div.lastDividendDate)})</span></span></div>`);
+  }
+  if (stock.exDivDate) {
+    divRows.push(`<div class="kv-row"><span class="kv-label">Prochain ex-div</span><span class="kv-value">${escapeHtml(stock.exDivDate)}</span></div>`);
+  }
+  if (divRows.length === 0) {
+    divRows.push(`<div class="kv-row"><span class="kv-label muted">Pas de données dividende disponibles</span></div>`);
+  }
+
+  // News avec résumés
   const newsHtml = newsList.length > 0
     ? newsList.map(n => {
         const seen = diff.seenNewsUrls.has(n.url);
@@ -629,10 +876,15 @@ function renderStockCard(stock) {
           <div class="news-item ${seen ? 'seen' : ''}">
             ${!seen ? '<span class="new-dot"></span>' : ''}
             <div style="flex:1;">
-              <span class="news-sentiment ${sentiment}"></span>
-              <a href="${escapeHtml(n.url)}" target="_blank" rel="noopener" class="news-link">${escapeHtml(n.titre_fr || n.titre_vo || '')}</a>
-              ${n.titre_vo && n.titre_fr !== n.titre_vo ? `<a href="${escapeHtml(n.url)}" target="_blank" rel="noopener" class="news-vo-link">🇬🇧 VO</a>` : ''}
-              <div class="news-meta">${escapeHtml(n.date || '')}</div>
+              <div class="news-headline">
+                <span class="news-sentiment ${sentiment}"></span>
+                <a href="${escapeHtml(n.url)}" target="_blank" rel="noopener" class="news-link">${escapeHtml(n.titre_fr || n.titre_vo || '')}</a>
+              </div>
+              ${n.resume_fr ? `<div class="news-summary">${escapeHtml(n.resume_fr)}</div>` : ''}
+              <div class="news-meta">
+                ${escapeHtml(formatDateFr(n.date) || '')}
+                ${n.titre_vo && n.titre_fr !== n.titre_vo ? `· <a href="${escapeHtml(n.url)}" target="_blank" rel="noopener" class="news-vo-link">🇬🇧 VO</a>` : ''}
+              </div>
             </div>
           </div>`;
       }).join('')
@@ -644,6 +896,7 @@ function renderStockCard(stock) {
   return `
     <article class="stock-card">
       ${diff.verdictChanged ? '<span class="new-verdict-badge">NOUVEAU VERDICT</span>' : ''}
+      ${stock.usedCache ? '<span class="cached-marker">💾 cache (rien de neuf)</span>' : ''}
       <div class="card-header">
         <div class="card-title-block">
           <div class="ticker">
@@ -667,18 +920,10 @@ function renderStockCard(stock) {
       <div class="card-section">
         <div class="card-section-title">
           💰 Dividende
-          ${diff.dividendUnchanged ? '<span class="unchanged-marker">=</span>' : ''}
+          ${diff.dividendUnchanged && !isHausse ? '<span class="unchanged-marker">=</span>' : ''}
         </div>
-        ${hausseDiv ? `<div class="div-increase-badge">🎉 HAUSSE ANNONCÉE${detailsHausse ? ' : ' + escapeHtml(detailsHausse) : ''}</div>` : ''}
-        <div class="kv-row">
-          <span class="kv-label">Yield</span>
-          <span class="kv-value">${stock.yield != null ? stock.yield.toFixed(2) + '%' : '—'}</span>
-        </div>
-        <div class="kv-row">
-          <span class="kv-label">Dernier dividende</span>
-          <span class="kv-value">${stock.lastDividend != null ? formatCurrency(stock.lastDividend, stock.currency) : '—'}</span>
-        </div>
-        ${stock.exDivDate ? `<div class="kv-row"><span class="kv-label">Ex-dividende</span><span class="kv-value">${escapeHtml(stock.exDivDate)}</span></div>` : ''}
+        ${hausseHtml}
+        ${divRows.join('')}
       </div>
 
       ${(epsHtml || nextEarningsHtml) ? `
@@ -713,13 +958,13 @@ function sortStocks(stocks, mode) {
 }
 
 // ============================================================
-// RENDERING : portefeuille
+// RENDER PORTFOLIO / ASIA / MANAGE
 // ============================================================
 
 function renderPortfolio() {
   const container = document.getElementById('portfolioList');
   if (!state.currentSnapshot) {
-    container.innerHTML = '<div class="empty-state">Lance une première analyse pour voir tes actions.</div>';
+    container.innerHTML = '<div class="empty-state">Va dans l\'onglet "Analyse" pour lancer une première veille.</div>';
     return;
   }
 
@@ -727,13 +972,11 @@ function renderPortfolio() {
   const showOwned = document.getElementById('filterOwned').checked;
   const showWatchlist = document.getElementById('filterWatchlist').checked;
 
-  // Récup data des actions US/perso
   const stockData = state.stocks.map(s => {
     const data = state.currentSnapshot.data[s.ticker];
-    return data ? { ...data, type: s.type } : { ...s, error: 'Pas analysé' };
+    return data ? { ...data, type: s.type, name: s.name || data.name, sector: s.sector || data.sector } : { ...s, error: 'Pas encore analysé' };
   });
 
-  // Filtres
   const filtered = stockData.filter(s => {
     if (s.type === 'owned' && !showOwned) return false;
     if (s.type === 'watchlist' && !showWatchlist) return false;
@@ -749,22 +992,17 @@ function renderPortfolio() {
   container.innerHTML = sorted.map(renderStockCard).join('');
 }
 
-// ============================================================
-// RENDERING : Asie (macro + sociétés + perso)
-// ============================================================
-
 function renderAsiaMacro() {
   const container = document.getElementById('asiaMacroCard');
   const macro = state.currentSnapshot?.asiaMacro;
   if (!macro) {
-    container.innerHTML = '<div class="empty-state">Lance une analyse pour générer le point macro Asie.</div>';
+    container.innerHTML = '<div class="empty-state">Lance une analyse Asie pour générer le point macro.</div>';
     return;
   }
   if (macro.error) {
     container.innerHTML = `<div class="error-card">⚠️ Erreur macro Asie : ${escapeHtml(macro.error)}</div>`;
     return;
   }
-
   const indices = macro.indices || {};
   const buildCountry = (key, label, indexKey) => {
     const c = macro[key];
@@ -775,18 +1013,13 @@ function renderAsiaMacro() {
     return `
       <div class="country-block">
         <div class="country-header">
-          <div class="country-name">
-            ${label}
-            <span class="country-index">${indexStr}</span>
-          </div>
+          <div class="country-name">${label}<span class="country-index">${indexStr}</span></div>
           <span class="verdict-pill ${(c.verdict || 'neutre').replace('é', 'e').replace('à', 'a')}">${verdictEmoji} ${escapeHtml(c.verdict || 'neutre')}</span>
         </div>
         ${c.alerte_majeure ? `<div class="macro-alert">🚨 ${escapeHtml(c.alerte_majeure)}</div>` : ''}
         <div class="country-summary">${escapeHtml(c.resume || '')}</div>
-      </div>
-    `;
+      </div>`;
   };
-
   container.innerHTML = `
     ${buildCountry('chine', '🇨🇳 Chine / HK', '^HSI')}
     ${buildCountry('japon', '🇯🇵 Japon', '^N225')}
@@ -807,18 +1040,13 @@ function renderAsiaCompanyCard(meta, withDiscovery = true) {
             <div class="sector-label">${escapeHtml(meta.country)} • ${escapeHtml(meta.sector)}</div>
           </div>
         </div>
-        <div class="card-summary muted">Pas encore analysé. Lance une analyse.</div>
+        <div class="card-summary muted">Pas encore analysé. Coche "Asie - Découverte" dans l'onglet Analyse.</div>
         ${withDiscovery ? renderDiscoveryToggle(meta) : ''}
-      </article>
-    `;
+      </article>`;
   }
-
-  // On enrichit la meta avec name/country/sector
   const enriched = { ...data, name: meta.name, country: meta.country, sector: meta.sector };
   const cardHtml = renderStockCard(enriched);
   if (!withDiscovery) return cardHtml;
-
-  // On injecte le toggle découverte juste avant le </article>
   return cardHtml.replace('</article>', renderDiscoveryToggle(meta) + '</article>');
 }
 
@@ -833,22 +1061,18 @@ function renderDiscoveryToggle(meta) {
       <ul class="warn-list">
         ${ASIA_WARNINGS.map(w => `<li><strong>${escapeHtml(w.title)} :</strong> ${escapeHtml(w.text)}</li>`).join('')}
       </ul>
-    </div>
-  `;
+    </div>`;
 }
 
 function renderAsiaCompanies() {
   const container = document.getElementById('asiaCompaniesList');
   container.innerHTML = ASIA_COMPANIES.map(m => renderAsiaCompanyCard(m, true)).join('');
-  // Branche les toggles fiches découverte
   container.querySelectorAll('.discovery-toggle').forEach(btn => {
     btn.addEventListener('click', () => {
       const target = document.getElementById(btn.dataset.target);
       if (target) {
         target.classList.toggle('hidden');
-        btn.textContent = target.classList.contains('hidden')
-          ? '📖 Fiche découverte ▾'
-          : '📖 Fiche découverte ▴';
+        btn.textContent = target.classList.contains('hidden') ? '📖 Fiche découverte ▾' : '📖 Fiche découverte ▴';
       }
     });
   });
@@ -869,12 +1093,7 @@ function renderAsiaPerso() {
   }).join('');
 }
 
-// ============================================================
-// RENDERING : Gestion actions (écran 3)
-// ============================================================
-
 function renderManageList() {
-  // Stocks US / perso
   const stocksList = document.getElementById('stocksManageList');
   if (state.stocks.length === 0) {
     stocksList.innerHTML = '<div class="empty-state">Aucune action. Ajoute-en une ci-dessus.</div>';
@@ -891,24 +1110,18 @@ function renderManageList() {
           </button>
           <button class="delete-btn" data-idx="${idx}" data-action="delete-stock">×</button>
         </div>
-      </div>
-    `).join('');
+      </div>`).join('');
   }
 
-  // Asie perso
   const asiaList = document.getElementById('asiaManageList');
-  let html = '';
-  // 13 préremplies (non supprimables)
-  html += '<div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">📚 Préremplies (non supprimables) :</div>';
+  let html = '<div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">📚 Préremplies (non supprimables) :</div>';
   html += ASIA_COMPANIES.map(a => `
     <div class="manage-row" style="opacity:0.7;">
       <div class="manage-row-info">
         <div class="manage-row-ticker">${escapeHtml(a.ticker)}</div>
         <div class="manage-row-name">${escapeHtml(a.name)} • ${escapeHtml(a.country)}</div>
       </div>
-    </div>
-  `).join('');
-  // Asie perso (supprimables)
+    </div>`).join('');
   if (state.asiaPerso.length > 0) {
     html += '<div style="font-size:12px; color:var(--text-muted); margin:12px 0 8px;">⭐ Tes ajouts :</div>';
     html += state.asiaPerso.map((ticker, idx) => `
@@ -919,14 +1132,12 @@ function renderManageList() {
         <div class="manage-row-actions">
           <button class="delete-btn" data-idx="${idx}" data-action="delete-asia-perso">×</button>
         </div>
-      </div>
-    `).join('');
+      </div>`).join('');
   }
   asiaList.innerHTML = html;
 
-  // Branche les handlers
   stocksList.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx);
       const action = btn.dataset.action;
       if (action === 'toggle-type') {
@@ -935,6 +1146,7 @@ function renderManageList() {
         saveStocks();
         renderManageList();
         renderPortfolio();
+        renderAnalysisCounts();
       } else if (action === 'delete-stock') {
         const s = state.stocks[idx];
         if (confirm(`Supprimer ${s.ticker} ${s.name || ''} ?`)) {
@@ -942,6 +1154,7 @@ function renderManageList() {
           saveStocks();
           renderManageList();
           renderPortfolio();
+          renderAnalysisCounts();
         }
       }
     });
@@ -956,13 +1169,92 @@ function renderManageList() {
         saveAsiaPerso();
         renderManageList();
         renderAsiaPerso();
+        renderAnalysisCounts();
       }
     });
   });
 }
 
 // ============================================================
-// HEADER : label "Dernière analyse"
+// RENDER ANALYSE (compteurs + estimation)
+// ============================================================
+
+function renderAnalysisCounts() {
+  const c = getCountByCategory();
+  const el = id => document.getElementById(id);
+  if (el('catOwnedCount'))     el('catOwnedCount').textContent = `${c.owned} actions`;
+  if (el('catWatchlistCount')) el('catWatchlistCount').textContent = `${c.watchlist} actions`;
+  if (el('catAsiaPersoCount')) el('catAsiaPersoCount').textContent = `${c.asiaPerso} actions`;
+
+  updateAnalysisEstimate();
+}
+
+function updateAnalysisEstimate() {
+  const prefs = readPrefsFromUI();
+  const queue = buildAnalysisQueue(prefs);
+  const total = queue.length + (prefs.catAsiaDiscover ? 1 : 0);
+  const secPerStock = prefs.optSkipUnchanged && state.currentSnapshot ? 4 : 8;  // estimation
+  const estSec = total * secPerStock;
+  const estEl = document.getElementById('analysisEstimate');
+  if (!estEl) return;
+  if (total === 0) {
+    estEl.textContent = 'Aucune catégorie sélectionnée.';
+  } else {
+    const min = Math.floor(estSec / 60);
+    const sec = estSec % 60;
+    const timeStr = min > 0 ? `~${min} min ${sec > 0 ? sec + 's' : ''}` : `~${sec}s`;
+    estEl.textContent = `Analyse de ${total} élément${total > 1 ? 's' : ''} • estimé ${timeStr}`;
+  }
+}
+
+function renderLastAnalysisInfo() {
+  const info = document.getElementById('lastAnalysisInfo');
+  if (!state.currentSnapshot) {
+    info.innerHTML = '<div class="empty-state">Aucune analyse pour l\'instant.</div>';
+    return;
+  }
+  const data = state.currentSnapshot.data;
+  const tickers = Object.keys(data);
+  const errors = tickers.filter(t => data[t].error).length;
+  const cached = tickers.filter(t => data[t].usedCache).length;
+  const analyzed = tickers.length - errors - cached;
+  const dt = new Date(state.currentSnapshot.timestamp);
+  info.innerHTML = `
+    <div class="stock-card">
+      <div style="font-size:14px;">
+        <div><strong>📅 Date :</strong> ${dt.toLocaleString('fr-FR')}</div>
+        <div style="margin-top:8px;"><strong>✅ ${analyzed}</strong> analysées via IA</div>
+        ${cached > 0 ? `<div><strong>💾 ${cached}</strong> récupérées depuis le cache (rien de neuf)</div>` : ''}
+        ${errors > 0 ? `<div style="color:var(--verdict-negative);"><strong>⚠️ ${errors}</strong> en erreur</div>` : ''}
+        <div style="margin-top:8px;"><strong>Total stocké :</strong> ${tickers.length} tickers</div>
+      </div>
+    </div>`;
+}
+
+// ============================================================
+// READ / WRITE PREFS
+// ============================================================
+
+function readPrefsFromUI() {
+  return {
+    catOwned: document.getElementById('catOwned')?.checked ?? true,
+    catWatchlist: document.getElementById('catWatchlist')?.checked ?? true,
+    catAsiaDiscover: document.getElementById('catAsiaDiscover')?.checked ?? false,
+    catAsiaPerso: document.getElementById('catAsiaPerso')?.checked ?? true,
+    optSkipUnchanged: document.getElementById('optSkipUnchanged')?.checked ?? true
+  };
+}
+
+function applyPrefsToUI() {
+  const p = state.analysisPrefs;
+  ['catOwned', 'catWatchlist', 'catAsiaDiscover', 'catAsiaPerso', 'optSkipUnchanged'].forEach(k => {
+    const el = document.getElementById(k);
+    if (el) el.checked = p[k];
+  });
+}
+
+// ============================================================
+// HEADER LABEL
 // ============================================================
 
 function updateLastAnalysisLabel() {
@@ -982,6 +1274,8 @@ function renderAll() {
   renderAsiaCompanies();
   renderAsiaPerso();
   renderManageList();
+  renderAnalysisCounts();
+  renderLastAnalysisInfo();
   updateLastAnalysisLabel();
 }
 
@@ -1003,7 +1297,7 @@ function setupNavigation() {
 }
 
 // ============================================================
-// SETUP SETTINGS
+// SETUP
 // ============================================================
 
 function setupSettings() {
@@ -1033,7 +1327,7 @@ function setupSettings() {
 
   document.getElementById('exportBtn').addEventListener('click', () => {
     const dump = {
-      version: 1,
+      version: 1.1,
       exportedAt: new Date().toISOString(),
       stocks: state.stocks,
       asiaPerso: state.asiaPerso,
@@ -1082,14 +1376,10 @@ function setupSettings() {
     Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
     loadFromStorage();
     renderAll();
-    setupSettings(); // recharger les inputs vides
+    setupSettings();
     showToast('🗑️ Reset effectué');
   });
 }
-
-// ============================================================
-// SETUP : ajout de tickers
-// ============================================================
 
 function setupAddTicker() {
   document.getElementById('addTickerBtn').addEventListener('click', () => {
@@ -1106,7 +1396,6 @@ function setupAddTicker() {
     }
 
     if (type === 'asia-perso') {
-      // Convention : on garde la casse originale pour les tickers asiatiques (.HK, .T, .KS)
       const tickerCased = input.value.trim();
       if (state.asiaPerso.includes(tickerCased)) {
         msgEl.textContent = '⚠️ Ticker déjà présent';
@@ -1130,18 +1419,28 @@ function setupAddTicker() {
     input.value = '';
     renderManageList();
     renderPortfolio();
+    renderAnalysisCounts();
     setTimeout(() => { msgEl.textContent = ''; }, 3000);
   });
 }
-
-// ============================================================
-// SETUP : filtres & tri du portefeuille
-// ============================================================
 
 function setupPortfolioControls() {
   document.getElementById('sortSelect').addEventListener('change', renderPortfolio);
   document.getElementById('filterOwned').addEventListener('change', renderPortfolio);
   document.getElementById('filterWatchlist').addEventListener('change', renderPortfolio);
+}
+
+function setupAnalysisControls() {
+  applyPrefsToUI();
+  ['catOwned', 'catWatchlist', 'catAsiaDiscover', 'catAsiaPerso', 'optSkipUnchanged'].forEach(k => {
+    const el = document.getElementById(k);
+    if (el) el.addEventListener('change', () => {
+      state.analysisPrefs = readPrefsFromUI();
+      saveAnalysisPrefs();
+      updateAnalysisEstimate();
+    });
+  });
+  document.getElementById('refreshBtn').addEventListener('click', runFullAnalysis);
 }
 
 // ============================================================
@@ -1166,13 +1465,9 @@ function init() {
   setupSettings();
   setupAddTicker();
   setupPortfolioControls();
-
-  document.getElementById('refreshBtn').addEventListener('click', runFullAnalysis);
-
+  setupAnalysisControls();
   renderAll();
   registerSW();
-
-  // Refresh régulier du label "il y a X min"
   setInterval(updateLastAnalysisLabel, 60000);
 }
 
