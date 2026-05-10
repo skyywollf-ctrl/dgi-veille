@@ -6,6 +6,7 @@
   --bg-card: #141925;
   --bg-card-hover: #1a2030;
   --accent: #3b82f6;
+  --accent-dark: #2563eb;
   --text-main: #e2e8f0;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
@@ -17,8 +18,8 @@
   --bg-neutral-soft: rgba(245, 158, 11, 0.12);
   --bg-negative-soft: rgba(239, 68, 68, 0.12);
   --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --header-height: 130px;
-  --nav-height: 64px;
+  --header-height: 60px;
+  --nav-height: 70px;
   --radius: 12px;
 }
 
@@ -35,7 +36,7 @@ html, body {
 }
 
 body {
-  padding-top: var(--header-height);
+  padding-top: calc(var(--header-height) + env(safe-area-inset-top, 0));
   padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0));
   min-height: 100vh;
 }
@@ -49,14 +50,14 @@ input, select { font-family: inherit; }
 .muted { color: var(--text-muted); font-weight: normal; font-size: 0.9em; }
 
 /* ============================================ */
-/* HEADER FIXE                                  */
+/* HEADER (compact maintenant qu'il n'a plus le bouton) */
 /* ============================================ */
 .app-header {
   position: fixed;
   top: 0; left: 0; right: 0;
   background: var(--bg-main);
   border-bottom: 1px solid var(--border-subtle);
-  padding: 14px 16px 12px;
+  padding: 14px 16px;
   padding-top: calc(14px + env(safe-area-inset-top, 0));
   z-index: 100;
 }
@@ -65,7 +66,6 @@ input, select { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
 }
 
 .app-title {
@@ -78,33 +78,18 @@ input, select { font-family: inherit; }
   color: var(--text-secondary);
 }
 
-.refresh-btn {
-  width: 100%;
-  background: var(--accent);
-  color: white;
-  padding: 12px;
-  border-radius: var(--radius);
-  font-size: 15px;
-  font-weight: 600;
-  min-height: 44px;
-  transition: opacity 0.15s, transform 0.1s;
-}
-
-.refresh-btn:active { transform: scale(0.98); }
-.refresh-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
+/* ============================================ */
+/* PROGRESS BAR (dans l'écran Analyse)          */
+/* ============================================ */
 .progress-container {
   margin-top: 10px;
 }
 
 .progress-bar {
   width: 100%;
-  height: 6px;
+  height: 8px;
   background: var(--border-subtle);
-  border-radius: 3px;
+  border-radius: 4px;
   overflow: hidden;
 }
 
@@ -116,9 +101,9 @@ input, select { font-family: inherit; }
 }
 
 .progress-label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
-  margin-top: 6px;
+  margin-top: 8px;
   text-align: center;
 }
 
@@ -140,9 +125,7 @@ input, select { font-family: inherit; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.section {
-  margin-bottom: 24px;
-}
+.section { margin-bottom: 24px; }
 
 .section-title {
   font-size: 16px;
@@ -185,7 +168,6 @@ input, select { font-family: inherit; }
 }
 
 .control:focus { border-color: var(--accent); }
-
 .input { width: 100%; }
 
 .filters {
@@ -210,6 +192,43 @@ input, select { font-family: inherit; }
 .filter-chip input { accent-color: var(--accent); }
 
 /* ============================================ */
+/* ANALYSIS SCREEN (checkboxes)                 */
+/* ============================================ */
+.analysis-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.analysis-checkbox:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.analysis-checkbox input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.checkbox-content { flex: 1; }
+.checkbox-title { font-size: 15px; font-weight: 600; }
+.checkbox-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+/* ============================================ */
 /* CARDS LIST + STOCK CARD                       */
 /* ============================================ */
 .cards-list {
@@ -224,10 +243,7 @@ input, select { font-family: inherit; }
   border-radius: var(--radius);
   padding: 16px;
   animation: fadeIn 0.3s ease;
-}
-
-.stock-card.unchanged-all {
-  opacity: 0.85;
+  position: relative;
 }
 
 .card-header {
@@ -313,7 +329,6 @@ input, select { font-family: inherit; }
   border-color: var(--verdict-negative);
 }
 
-/* Verdict inchangé : contour pointillé */
 .verdict-pill.unchanged {
   border-style: dashed;
 }
@@ -328,6 +343,18 @@ input, select { font-family: inherit; }
   border-radius: 4px;
   margin-bottom: 8px;
   letter-spacing: 0.5px;
+}
+
+.cached-marker {
+  display: inline-block;
+  background: rgba(100, 116, 139, 0.2);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  margin-left: 6px;
 }
 
 .unchanged-marker {
@@ -380,22 +407,33 @@ input, select { font-family: inherit; }
   align-items: center;
   padding: 4px 0;
   font-size: 13px;
+  gap: 8px;
 }
 
-.kv-label { color: var(--text-secondary); }
-.kv-value { font-weight: 600; }
+.kv-label { color: var(--text-secondary); flex-shrink: 0; }
+.kv-value { font-weight: 600; text-align: right; }
 
+/* Hausse dividende détaillée */
 .div-increase-badge {
-  display: block;
   background: var(--bg-positive-soft);
   color: var(--verdict-positive);
   border: 1px solid var(--verdict-positive);
-  padding: 8px 12px;
+  padding: 12px;
   border-radius: 8px;
   font-size: 13px;
-  font-weight: 600;
-  margin: 8px 0;
+  margin: 8px 0 12px;
 }
+
+.haus-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  gap: 8px;
+}
+
+.haus-row span { color: var(--verdict-positive); opacity: 0.85; }
+.haus-row strong { color: var(--verdict-positive); font-weight: 700; }
 
 .eps-result {
   display: inline-block;
@@ -409,26 +447,40 @@ input, select { font-family: inherit; }
 .eps-result.miss    { background: var(--bg-negative-soft); color: var(--verdict-negative); }
 .eps-result.in-line { background: var(--bg-neutral-soft);  color: var(--verdict-neutral); }
 
+/* News */
 .news-item {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 6px 0;
+  padding: 10px 0;
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.45;
+  border-bottom: 1px solid var(--border-subtle);
 }
+
+.news-item:last-child { border-bottom: 0; }
 
 .news-item.seen {
   opacity: 0.5;
-  font-style: italic;
+}
+
+.news-headline {
+  font-weight: 600;
+  margin-bottom: 4px;
 }
 
 .news-link {
-  flex: 1;
   color: var(--text-main);
 }
 
 .news-link:hover { color: var(--accent); }
+
+.news-summary {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 4px 0;
+}
 
 .news-meta {
   font-size: 11px;
@@ -439,7 +491,6 @@ input, select { font-family: inherit; }
 .news-vo-link {
   font-size: 11px;
   color: var(--text-muted);
-  margin-left: 6px;
   white-space: nowrap;
 }
 
@@ -448,7 +499,7 @@ input, select { font-family: inherit; }
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  margin-right: 4px;
+  margin-right: 6px;
   vertical-align: middle;
 }
 
@@ -500,23 +551,9 @@ input, select { font-family: inherit; }
   margin-bottom: 8px;
 }
 
-.country-name {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.country-index {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-left: 8px;
-  font-weight: normal;
-}
-
-.country-summary {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-main);
-}
+.country-name { font-size: 15px; font-weight: 600; }
+.country-index { font-size: 12px; color: var(--text-secondary); margin-left: 8px; font-weight: normal; }
+.country-summary { font-size: 13px; line-height: 1.5; color: var(--text-main); }
 
 .geopolitics-block {
   border-top: 1px solid var(--border-subtle);
@@ -528,7 +565,7 @@ input, select { font-family: inherit; }
 }
 
 /* ============================================ */
-/* ASIE - FICHE DÉCOUVERTE (dépliable)           */
+/* FICHE DÉCOUVERTE                              */
 /* ============================================ */
 .discovery-toggle {
   background: transparent;
@@ -560,12 +597,11 @@ input, select { font-family: inherit; }
 }
 
 .discovery-content h4:first-child { margin-top: 0; }
-
 .discovery-content .warn-list { padding-left: 18px; }
 .discovery-content .warn-list li { margin-bottom: 4px; }
 
 /* ============================================ */
-/* MANAGE LIST (écran Actions)                   */
+/* MANAGE LIST                                   */
 /* ============================================ */
 .add-row {
   display: flex;
@@ -590,20 +626,9 @@ input, select { font-family: inherit; }
   border: 1px solid var(--border-subtle);
 }
 
-.manage-row-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.manage-row-ticker {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.manage-row-name {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
+.manage-row-info { flex: 1; min-width: 0; }
+.manage-row-ticker { font-weight: 600; font-size: 14px; }
+.manage-row-name { font-size: 12px; color: var(--text-secondary); }
 
 .manage-row-actions {
   display: flex;
@@ -650,6 +675,11 @@ input, select { font-family: inherit; }
   color: white;
 }
 
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn-secondary {
   background: var(--bg-card);
   color: var(--text-main);
@@ -671,9 +701,7 @@ input, select { font-family: inherit; }
 /* ============================================ */
 /* SETTINGS                                      */
 /* ============================================ */
-.setting-block {
-  margin-bottom: 16px;
-}
+.setting-block { margin-bottom: 16px; }
 
 .setting-label {
   display: block;
@@ -683,11 +711,7 @@ input, select { font-family: inherit; }
   color: var(--text-main);
 }
 
-.hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 6px;
-}
+.hint { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
 
 .toggle-row {
   display: flex;
@@ -706,23 +730,14 @@ input, select { font-family: inherit; }
   accent-color: var(--accent);
 }
 
-.info-msg {
-  font-size: 13px;
-  margin-top: 8px;
-  min-height: 18px;
-}
-
+.info-msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
 .info-msg.ok    { color: var(--verdict-positive); }
 .info-msg.error { color: var(--verdict-negative); }
 
-.version-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-align: center;
-}
+.version-label { font-size: 11px; color: var(--text-muted); text-align: center; }
 
 /* ============================================ */
-/* NAVIGATION BAS                                */
+/* NAVIGATION BAS (5 onglets, bouton central)   */
 /* ============================================ */
 .bottom-nav {
   position: fixed;
@@ -753,6 +768,38 @@ input, select { font-family: inherit; }
 .nav-icon { font-size: 22px; }
 .nav-label { font-size: 10px; font-weight: 500; }
 
+/* Bouton central (Analyse) plus visible */
+.nav-btn-primary {
+  position: relative;
+}
+
+.nav-btn-primary .nav-icon {
+  background: var(--accent);
+  color: white;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-top: -16px;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.4);
+  transition: transform 0.15s;
+}
+
+.nav-btn-primary:active .nav-icon {
+  transform: scale(0.92);
+}
+
+.nav-btn-primary.active .nav-icon {
+  background: var(--accent-dark);
+}
+
+.nav-btn-primary.active .nav-label {
+  color: var(--accent);
+}
+
 /* ============================================ */
 /* TOAST                                         */
 /* ============================================ */
@@ -781,7 +828,7 @@ input, select { font-family: inherit; }
 }
 
 /* ============================================ */
-/* DESKTOP : tweaks mineurs                      */
+/* DESKTOP                                       */
 /* ============================================ */
 @media (min-width: 600px) {
   .screen-controls { flex-direction: row; }
