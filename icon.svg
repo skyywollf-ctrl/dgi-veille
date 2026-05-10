@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fond plein (safe zone pour iOS masquable) -->
+  <rect width="512" height="512" fill="#0a0e1a"/>
+
+  <!-- Cercle d'accent en fond -->
+  <circle cx="256" cy="256" r="200" fill="#141925" stroke="#3b82f6" stroke-width="6"/>
+
+  <!-- Symbole : courbe ascendante (DGI = croissance dividendes) -->
+  <polyline
+    points="140,360 220,300 280,330 360,180"
+    fill="none"
+    stroke="#10b981"
+    stroke-width="20"
+    stroke-linecap="round"
+    stroke-linejoin="round"/>
+
+  <!-- Points sur la courbe -->
+  <circle cx="140" cy="360" r="12" fill="#10b981"/>
+  <circle cx="220" cy="300" r="12" fill="#10b981"/>
+  <circle cx="280" cy="330" r="12" fill="#10b981"/>
+  <circle cx="360" cy="180" r="14" fill="#10b981"/>
+
+  <!-- Symbole $ stylisé en bas -->
+  <text
+    x="256" y="450"
+    text-anchor="middle"
+    font-family="-apple-system, BlinkMacSystemFont, sans-serif"
+    font-size="60"
+    font-weight="700"
+    fill="#3b82f6">DGI</text>
+</svg>

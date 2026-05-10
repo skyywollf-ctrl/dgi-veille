@@ -1,0 +1,20 @@
+{
+  "name": "DGI Veille",
+  "short_name": "DGI Veille",
+  "description": "Veille mensuelle Dividend Growth Investing : portefeuille US + découverte Asie",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0e1a",
+  "theme_color": "#0a0e1a",
+  "lang": "fr",
+  "scope": "./",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

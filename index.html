@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DGI Veille">
+  <title>DGI Veille</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ============================================ -->
+  <!-- HEADER GLOBAL (fixe en haut)                 -->
+  <!-- ============================================ -->
+  <header class="app-header">
+    <div class="header-row">
+      <h1 class="app-title">📊 DGI Veille</h1>
+      <span id="lastAnalysisLabel" class="last-analysis">Jamais analysé</span>
+    </div>
+    <button id="refreshBtn" class="refresh-btn">🔄 Lancer une analyse</button>
+    <div id="progressContainer" class="progress-container hidden">
+      <div class="progress-bar"><div id="progressBar" class="progress-bar-fill"></div></div>
+      <div id="progressLabel" class="progress-label">Initialisation…</div>
+    </div>
+  </header>
+
+  <!-- ============================================ -->
+  <!-- ÉCRAN 1 : MON PORTEFEUILLE                   -->
+  <!-- ============================================ -->
+  <main id="screen-portfolio" class="screen active">
+    <div class="screen-controls">
+      <select id="sortSelect" class="control">
+        <option value="verdict">Tri : Verdict (rouges en haut)</option>
+        <option value="alpha">Tri : Alphabétique</option>
+        <option value="change">Tri : Variation %</option>
+      </select>
+      <div class="filters">
+        <label class="filter-chip">
+          <input type="checkbox" id="filterOwned" checked>
+          <span>Détenus</span>
+        </label>
+        <label class="filter-chip">
+          <input type="checkbox" id="filterWatchlist" checked>
+          <span>Watchlist</span>
+        </label>
+      </div>
+    </div>
+    <div id="portfolioList" class="cards-list">
+      <div class="empty-state">
+        Lance une première analyse pour voir tes actions.
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================================ -->
+  <!-- ÉCRAN 2 : ASIE - DÉCOUVERTE                  -->
+  <!-- ============================================ -->
+  <main id="screen-asia" class="screen">
+    <div class="section">
+      <h2 class="section-title">🌏 Macro & Marché</h2>
+      <div id="asiaMacroCard" class="macro-card">
+        <div class="empty-state">Lance une analyse pour générer le point macro Asie.</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">🏢 Sociétés à connaître</h2>
+      <div id="asiaCompaniesList" class="cards-list">
+        <div class="empty-state">Les 13 sociétés préremplies apparaîtront après une analyse.</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">⭐ Mes intérêts Asie</h2>
+      <div id="asiaPersoList" class="cards-list">
+        <div class="empty-state">Ajoute des tickers asiatiques depuis l'onglet "Actions".</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================================ -->
+  <!-- ÉCRAN 3 : MES ACTIONS (gestion)              -->
+  <!-- ============================================ -->
+  <main id="screen-stocks" class="screen">
+    <div class="section">
+      <h2 class="section-title">Ajouter un ticker</h2>
+      <div class="add-row">
+        <input type="text" id="newTickerInput" class="control input" placeholder="Ex: NVDA, 7203.T, 0700.HK" autocapitalize="characters">
+        <select id="newTickerType" class="control">
+          <option value="owned">Détenu</option>
+          <option value="watchlist">Watchlist</option>
+          <option value="asia-perso">Asie perso</option>
+        </select>
+        <button id="addTickerBtn" class="btn-primary">+ Ajouter</button>
+      </div>
+      <div id="addTickerMsg" class="info-msg"></div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">Portefeuille US / Monde</h2>
+      <div id="stocksManageList" class="manage-list"></div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">Sociétés Asie suivies</h2>
+      <div id="asiaManageList" class="manage-list"></div>
+    </div>
+  </main>
+
+  <!-- ============================================ -->
+  <!-- ÉCRAN 4 : SETTINGS                           -->
+  <!-- ============================================ -->
+  <main id="screen-settings" class="screen">
+    <div class="section">
+      <h2 class="section-title">🔑 Clés API</h2>
+
+      <div class="setting-block">
+        <label class="setting-label">Clé API Finnhub <span class="muted">(news)</span></label>
+        <input type="password" id="finnhubKey" class="control input" placeholder="Colle ta clé ici">
+        <p class="hint">
+          Gratuit, 60 req/min. <a href="https://finnhub.io/register" target="_blank" rel="noopener">Créer une clé sur finnhub.io →</a>
+        </p>
+      </div>
+
+      <div class="setting-block">
+        <label class="setting-label">Clé API Claude <span class="muted">(verdicts IA)</span></label>
+        <input type="password" id="claudeKey" class="control input" placeholder="sk-ant-...">
+        <p class="hint">
+          <a href="https://console.anthropic.com" target="_blank" rel="noopener">Créer une clé sur console.anthropic.com →</a>
+        </p>
+      </div>
+
+      <button id="saveKeysBtn" class="btn-primary full-width">Sauvegarder les clés</button>
+      <div id="keysSavedMsg" class="info-msg"></div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">⚙️ Options</h2>
+      <label class="toggle-row">
+        <span>Traduire les news en français par défaut</span>
+        <input type="checkbox" id="translateToggle" checked>
+      </label>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">💾 Données</h2>
+      <button id="exportBtn" class="btn-secondary full-width">📥 Exporter mes données (JSON)</button>
+      <label class="btn-secondary full-width file-label">
+        📤 Importer un export
+        <input type="file" id="importInput" accept="application/json" hidden>
+      </label>
+      <button id="resetBtn" class="btn-danger full-width">⚠️ Reset complet</button>
+    </div>
+
+    <div class="section">
+      <p class="version-label">DGI Veille v1.0 — données : Yahoo Finance, Finnhub, Claude API.</p>
+    </div>
+  </main>
+
+  <!-- ============================================ -->
+  <!-- NAVIGATION BAS                               -->
+  <!-- ============================================ -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-screen="portfolio">
+      <span class="nav-icon">💼</span>
+      <span class="nav-label">Portefeuille</span>
+    </button>
+    <button class="nav-btn" data-screen="asia">
+      <span class="nav-icon">🌏</span>
+      <span class="nav-label">Asie</span>
+    </button>
+    <button class="nav-btn" data-screen="stocks">
+      <span class="nav-icon">📋</span>
+      <span class="nav-label">Actions</span>
+    </button>
+    <button class="nav-btn" data-screen="settings">
+      <span class="nav-icon">⚙️</span>
+      <span class="nav-label">Settings</span>
+    </button>
+  </nav>
+
+  <!-- Toast pour notifications discrètes -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Scripts : data d'abord, app ensuite (chargés en modules ES) -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>
